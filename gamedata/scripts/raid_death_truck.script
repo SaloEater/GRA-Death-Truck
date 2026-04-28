@@ -6,18 +6,29 @@ local HUMAN_FACTIONS = {
 
 -- ── helpers ───────────────────────────────────────────────────────────────────
 
-local function spawn_dead_monolith_ring(center_pos, n, lname)
-	-- prefer the nearest online smart so NPCs come online at spawn time
+local function rand_pos_near(center, min_r, max_r)
+	local a = math.random() * math.pi * 2
+	local r = min_r + math.random() * (max_r - min_r)
+	local p = vector():set(
+		center.x + math.cos(a) * r,
+		center.y,
+		center.z + math.sin(a) * r)
+	if level.vertex_id(p) == 4294967295 then
+		local vid, nearest = db.actor:accessible_nearest(center, vector())
+		p = nearest
+	end
+	return p
+end
+
+local function spawn_loot_npcs(center_pos, lname)
+	local player_pos = db.actor:position()
 	local sm_se, best_d2 = nil, math.huge
 	for _, se in pairs(SIMBOARD.smarts_by_names) do
-		if se.online and not raid_events.raid_event_busy_smarts_t[se.id] then
-			local dx = se.position.x - center_pos.x
-			local dz = se.position.z - center_pos.z
+		if se.online then
+			local dx = se.position.x - player_pos.x
+			local dz = se.position.z - player_pos.z
 			local d2 = dx*dx + dz*dz
-			if d2 < best_d2 then
-				best_d2 = d2
-				sm_se   = se
-			end
+			if d2 < best_d2 then best_d2 = d2; sm_se = se end
 		end
 	end
 	if not sm_se then
@@ -25,56 +36,100 @@ local function spawn_dead_monolith_ring(center_pos, n, lname)
 		sm_se = fallback_id and SIMBOARD.smarts[fallback_id] and SIMBOARD.smarts[fallback_id].smrt
 	end
 	if not sm_se then
-		printf("![death_truck] no smart for corpse ring on %s", lname)
+		printf("![death_truck] no smart for loot NPCs on %s", lname)
 		return
 	end
 
-	for i = 1, n do
-		local angle = (i - 1) * (2 * math.pi / n)
-		local r     = 3 + math.random() * 3
-		local pos   = vector():set(
-			center_pos.x + math.cos(angle) * r,
-			center_pos.y,
-			center_pos.z + math.sin(angle) * r)
-		local lvid  = level.vertex_id(pos)
-		if lvid == 4294967295 then
-			local nearest = vector()
-			db.actor:accessible_nearest(pos, nearest)
-			pos  = nearest
-			lvid = level.vertex_id(pos)
-		end
+	local sq1 = SIMBOARD:create_squad(sm_se, "raid_event_loot_stalker_single")
+	local sq2 = SIMBOARD:create_squad(sm_se, "raid_event_loot_monolith_single")
+	if not sq1 or not sq2 then return end
 
-		local squad = SIMBOARD:create_squad(sm_se, "raid_event_dead_monolith_single")
-		if not squad then break end
+	raid_events.raid_event_squads[sq1.id] = {}
+	raid_events.raid_event_squads[sq2.id] = {}
 
-		raid_events.raid_event_squads[squad.id] = {}
-		raid_events.raid_event_busy_smarts_t[sm_se.id] = true
+	local sid1, sid2 = sq1.id, sq2.id
+	local mid1, mid2
 
-		local sid      = squad.id
-		local ring_pos = pos
-		local drop_pda = (i == 1)
-		CreateTimeEvent("dt_kill_" .. sid, "dt_kill_" .. sid, 1, function()
-			local sq = alife_object(sid)
-			if not sq then return true end
-			local all_done = true
-			for m in sq:squad_members() do
-				local go = db.storage[m.id] and db.storage[m.id].object
-				if go then
-					if go:alive() then
-						go:set_npc_position(ring_pos)
-						go:kill(go)
-						if drop_pda then
-							raid_utils.create_event_item("monolith_expedition", m.id)
-							drop_pda = false
-						end
-					end
-				else
-					all_done = false
-				end
-			end
-			return all_done
-		end)
+	local angle    = math.random() * math.pi * 2
+	local body_pos = vector():set(
+		center_pos.x + math.cos(angle) * 6,
+		center_pos.y,
+		center_pos.z + math.sin(angle) * 6)
+	if level.vertex_id(body_pos) == 4294967295 then
+		local nearest = vector()
+		db.actor:accessible_nearest(body_pos, nearest)
+		body_pos = nearest
 	end
+
+	-- step 0 (1 s poll): wait for both NPCs online, generate monolith loot
+	CreateTimeEvent("dt_0_" .. sid1, "dt_0_" .. sid1, 0, function()
+		local sq_1 = alife_object(sid1)
+		local sq_2 = alife_object(sid2)
+		if not (sq_1 and sq_2) then return false end
+
+		local go1, go2
+		for m in sq_1:squad_members() do
+			local go = db.storage[m.id] and db.storage[m.id].object
+			if go then go1 = go; mid1 = m.id; break end
+		end
+		for m in sq_2:squad_members() do
+			local go = db.storage[m.id] and db.storage[m.id].object
+			if go then go2 = go; mid2 = m.id; break end
+		end
+		if not (go1 and go2) then return false end
+
+		-- step 1: intercept alife_create_item during create_release_item, spawn captured items at truck
+		CreateTimeEvent("dt_1_" .. sid1, "dt_1_" .. sid1, 1, function()
+			local cur_go2 = db.storage[mid2] and db.storage[mid2].object
+			if cur_go2 then
+				local collected = {}
+				local orig_create = _G.alife_create_item
+				_G.alife_create_item = function(sec, obj, t)
+					collected[#collected + 1] = {sec = sec, t = t}
+					printf("[death_truck] collected item %s", sec)
+				end
+				death_manager.create_release_item(cur_go2)
+				_G.alife_create_item = orig_create
+
+				local truck_se = alife_object(raid_events.raid_event_death_truck_id)
+				local gvid = truck_se and truck_se.m_game_vertex_id or db.actor:game_vertex_id()
+				for _, entry in ipairs(collected) do
+					local p    = rand_pos_near(center_pos, 2, 5)
+					local lvid = level.vertex_id(p)
+					alife_create_item(entry.sec, {p, lvid, gvid}, entry.t)
+					printf("[death_truck] spawned item %s", entry.sec)
+				end
+				cur_go2:kill(cur_go2)
+			end
+
+			local cur_go1 = db.storage[mid1] and db.storage[mid1].object
+			if cur_go1 then
+				cur_go1:iterate_inventory(function(_, item)
+					local se = alife_object(item:id())
+					if se then alife_release(se) end
+				end, nil)
+				se_save_var(mid1, nil, "death_dropped", true)
+				cur_go1:set_visual_name("actors\\stalker_hero_coc\\sviter_3")
+				cur_go1:set_npc_position(body_pos)
+				cur_go1:kill(cur_go1)
+			end
+
+			-- step 2: release monolith SE after kill animation settles
+			CreateTimeEvent("dt_2_" .. sid1, "dt_2_" .. sid1, 1, function()
+				local sq2 = alife_object(sid2)
+				if sq2 then
+					for m in sq2:squad_members() do
+						local se = alife_object(m.id)
+						if se then alife_release(se) end
+					end
+				end
+				return true
+			end)
+			return true
+		end)
+
+		return true
+	end)
 end
 
 local spawning_for_death_truck = false
@@ -104,7 +159,6 @@ local function guarantee_five_factions(lname, tier)
 			candidates[#candidates + 1] = { fac = fac, tier = tier < rng[1] and rng[1] or clamp(tier, rng[1], rng[2]) }
 		end
 	end
-	-- Fisher-Yates shuffle on the array
 	for i = #candidates, 2, -1 do
 		local j = math.random(i)
 		candidates[i], candidates[j] = candidates[j], candidates[i]
@@ -126,8 +180,7 @@ end
 
 -- ── main functor (registered on raid_events_functors in on_game_start) ────────
 
-
---run_string local se = alife_object(1); if se then db.actor:set_actor_position(se.position) end
+--run_string local se = alife_object(raid_events.raid_event_death_truck_id); if se then db.actor:set_actor_position(se.position) end
 --run_string raid_death_truck.death_truck_ev(level.name(), 1, nil)
 function death_truck_ev(lname, tier, mod)
 	local truck_id = raid_objects_arranger.spawn_object_rand_point(
@@ -147,7 +200,7 @@ function death_truck_ev(lname, tier, mod)
 	local center_pos = raid_objects_arranger.raid_objects_arranger[truck_id]
 	                   and raid_objects_arranger.raid_objects_arranger[truck_id].pos
 	if center_pos then
-		spawn_dead_monolith_ring(center_pos, math.random(1, 2), lname)
+		spawn_loot_npcs(center_pos, lname)
 	end
 
 	spawning_for_death_truck = true
@@ -180,7 +233,7 @@ end
 function on_game_start()
 	raid_events.events_t["death_truck"] = {
 		tiers   = { 1, 2 },
-		exclude = { "raid_mono", "psi_horde" },
+		exclude = { "raid_army", "raid_merc", "raid_stalker", "raid_mono", "raid_bandit", "raid_sci", "raid_csky" },
 		func    = "death_truck_ev",
 	}
 
