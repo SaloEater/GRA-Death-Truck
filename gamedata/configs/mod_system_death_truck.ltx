@@ -1,0 +1,39 @@
+; DLTX patch — adds [death_truck] physic wreck section
+; Targets: configs/models/dynamic_objects.ltx (vanilla)
+; Base parent: [physic_object]
+
+[death_truck]:physic_object
+$spawn       = "wrecks\death_truck"
+$prefetch    = 32
+cform        = skeleton
+visual       = dynamics\vehicles\veh_kamaz\veh_kamaz_u_01.ogf
+;fixed_bones  = root
+remove_time  = 0
+destroyable  = false
+
+; DLTX patch — adds monolith_expedition_raid_event_item loot section
+; Targets: configs/items/items/items_raid_misc.ltx (Grim Raid Addon)
+; Pattern matches [stalker_raid_event_item] in the same file
+
+[monolith_expedition_raid_event_item]:tch_junk
+kind                 = i_misc
+visual				                     = dynamics\equipments\quest\notes_document_case_2.ogf
+inv_weight                                       = 0.1
+cost                                             = 1000
+inv_grid_width		                     		= 2
+inv_grid_height		                     		= 1
+inv_grid_x			                     		= 2
+inv_grid_y			                     		= 15
+inv_name             = st_monolith_expedition_pda
+inv_name_short       = st_monolith_expedition_pda
+description          = st_monolith_expedition_pda_descr
+can_trade										 = true
+
+; DLTX patch — adds single-NPC dead Monolith squad descriptor
+; Targets: configs/misc/squad_descr/squad_descr_raid_events.ltx
+
+[raid_event_dead_monolith_single]:online_offline_group
+faction      = monolith
+npc_random   = sim_default_monolith_3, sim_default_monolith_3, sim_default_monolith_3, sim_default_monolith_4, sim_default_monolith_4
+npc_in_squad = 1, 1
+common       = true

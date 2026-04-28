@@ -1,0 +1,5 @@
+<w>
+	<file name="ui\raid_textures\events\death_truck">
+		<texture id="raid_event_image_death_truck" x="0" y="0" width="456" height="249" />
+	</file>
+</w>

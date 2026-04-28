@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<string_table>
+	<string id="st_raid_event_death_truck">
+		<text>Death Truck</text>
+	</string>
+	<string id="st_raid_event_death_truck_descr">
+		<text>Word from a runner: a Monolith expedition got ambushed deep in the south. Their truck stopped rolling somewhere out there and the bodies are still on it. If it&apos;s true, half the Zone is converging on that wreck right now — every faction wants what the fanatics were carrying. Bring spare mags.</text>
+	</string>
+	<string id="st_monolith_expedition_pda">
+		<text>Monolith expedition log</text>
+	</string>
+	<string id="st_monolith_expedition_pda_descr">
+		<text>A PDA recovered from a dead Monolith stalker. Its last recorded entry describes destination coordinates and warns of multiple hostile factions converging on the area. The final entry is cut short.</text>
+	</string>
+</string_table>

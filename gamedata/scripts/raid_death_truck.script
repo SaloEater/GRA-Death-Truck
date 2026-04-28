@@ -1,0 +1,197 @@
+local DEATH_TRUCK_SECTION = "death_truck"
+local HUMAN_FACTIONS = {
+	stalker=1, bandit=1, renegade=1, csky=1, freedom=1,
+	duty=1, army=1, killer=1, ecolog=1,
+}
+
+-- ── helpers ───────────────────────────────────────────────────────────────────
+
+local function spawn_dead_monolith_ring(center_pos, n, lname)
+	-- prefer the nearest online smart so NPCs come online at spawn time
+	local sm_se, best_d2 = nil, math.huge
+	for _, se in pairs(SIMBOARD.smarts_by_names) do
+		if se.online and not raid_events.raid_event_busy_smarts_t[se.id] then
+			local dx = se.position.x - center_pos.x
+			local dz = se.position.z - center_pos.z
+			local d2 = dx*dx + dz*dz
+			if d2 < best_d2 then
+				best_d2 = d2
+				sm_se   = se
+			end
+		end
+	end
+	if not sm_se then
+		local fallback_id = raid_utils.find_random_smart(lname, true)
+		sm_se = fallback_id and SIMBOARD.smarts[fallback_id] and SIMBOARD.smarts[fallback_id].smrt
+	end
+	if not sm_se then
+		printf("![death_truck] no smart for corpse ring on %s", lname)
+		return
+	end
+
+	for i = 1, n do
+		local angle = (i - 1) * (2 * math.pi / n)
+		local r     = 3 + math.random() * 3
+		local pos   = vector():set(
+			center_pos.x + math.cos(angle) * r,
+			center_pos.y,
+			center_pos.z + math.sin(angle) * r)
+		local lvid  = level.vertex_id(pos)
+		if lvid == 4294967295 then
+			local nearest = vector()
+			db.actor:accessible_nearest(pos, nearest)
+			pos  = nearest
+			lvid = level.vertex_id(pos)
+		end
+
+		local squad = SIMBOARD:create_squad(sm_se, "raid_event_dead_monolith_single")
+		if not squad then break end
+
+		raid_events.raid_event_squads[squad.id] = {}
+		raid_events.raid_event_busy_smarts_t[sm_se.id] = true
+
+		local sid      = squad.id
+		local ring_pos = pos
+		local drop_pda = (i == 1)
+		CreateTimeEvent("dt_kill_" .. sid, "dt_kill_" .. sid, 1, function()
+			local sq = alife_object(sid)
+			if not sq then return true end
+			local all_done = true
+			for m in sq:squad_members() do
+				local go = db.storage[m.id] and db.storage[m.id].object
+				if go then
+					if go:alive() then
+						go:set_npc_position(ring_pos)
+						go:kill(go)
+						if drop_pda then
+							raid_utils.create_event_item("monolith_expedition", m.id)
+							drop_pda = false
+						end
+					end
+				else
+					all_done = false
+				end
+			end
+			return all_done
+		end)
+	end
+end
+
+local spawning_for_death_truck = false
+local raid_simulation_spawn_raid_sim_squad = raid_simulation.spawn_raid_sim_squad
+function raid_simulation.spawn_raid_sim_squad(path, section)
+	if spawning_for_death_truck then
+		section = section:gsub("^raid_event_", "raid_")
+	end
+	return raid_simulation_spawn_raid_sim_squad(path, section)
+end
+
+local function guarantee_five_factions(lname, tier)
+	local sim_entry = raid_simulation.raid_sim_t[lname]
+	if not sim_entry then return end
+
+	local baseline = {}
+	if sim_entry.stalkers then
+		for fac, _ in pairs(sim_entry.stalkers) do
+			if fac ~= "random" then baseline[fac] = true end
+		end
+	end
+
+	local candidates = {}
+	for fac, rng in pairs(raid_simulation.rank_limit_t) do
+		if HUMAN_FACTIONS[fac]
+		   and not baseline[fac] then
+			candidates[#candidates + 1] = { fac = fac, tier = tier < rng[1] and rng[1] or clamp(tier, rng[1], rng[2]) }
+		end
+	end
+	-- Fisher-Yates shuffle on the array
+	for i = #candidates, 2, -1 do
+		local j = math.random(i)
+		candidates[i], candidates[j] = candidates[j], candidates[i]
+	end
+
+	local distinct = size_table(baseline)
+	local facs = ""
+	for _, c in ipairs(candidates) do
+		if distinct >= 5 then break end
+		local before = size_table(raid_events.raid_event_busy_smarts_t)
+		raid_events_functors.spawn_event_stalker_squad(c.fac, lname, c.tier)
+		if size_table(raid_events.raid_event_busy_smarts_t) > before then
+			distinct = distinct + 1
+			facs = facs .. c.fac .. " "
+		end
+	end
+	printf("[death_truck] faction topup on %s: distinct=%s, facs=%s", lname, distinct, facs)
+end
+
+-- ── main functor (registered on raid_events_functors in on_game_start) ────────
+
+
+--run_string local se = alife_object(1); if se then db.actor:set_actor_position(se.position) end
+--run_string raid_death_truck.death_truck_ev(level.name(), 1, nil)
+function death_truck_ev(lname, tier, mod)
+	local truck_id = raid_objects_arranger.spawn_object_rand_point(
+		DEATH_TRUCK_SECTION, lname, 0, false)
+	if not truck_id then
+		printf("![death_truck] no valid spawn point on %s", lname)
+		return
+	end
+	raid_events.raid_event_death_truck_id = truck_id
+
+	local se = alife_object(truck_id)
+	if se then
+		se.angle    = vector():set(0, math.random() * math.pi * 2, math.pi / 2)
+		se.position = vector():set(se.position.x, se.position.y + 1.3, se.position.z)
+	end
+
+	local center_pos = raid_objects_arranger.raid_objects_arranger[truck_id]
+	                   and raid_objects_arranger.raid_objects_arranger[truck_id].pos
+	if center_pos then
+		spawn_dead_monolith_ring(center_pos, math.random(1, 2), lname)
+		CreateTimeEvent("tp", "tp", 5, function()
+			db.actor:set_actor_position(center_pos)
+			return true
+		end)
+	end
+
+	spawning_for_death_truck = true
+	guarantee_five_factions(lname, tier)
+	spawning_for_death_truck = false
+
+	if not has_alife_info("raid_event_death_truck") then
+		give_info("raid_event_death_truck")
+	end
+	printf("[death_truck] fired on %s", lname)
+end
+
+-- ── callbacks ─────────────────────────────────────────────────────────────────
+
+local function save_state(m_data)
+	m_data.raid_event_death_truck_id = raid_events.raid_event_death_truck_id
+end
+
+local function load_state(m_data)
+	raid_events.raid_event_death_truck_id = m_data.raid_event_death_truck_id
+end
+
+local function actor_on_first_update()
+	if level.name() ~= "l10_radar" then return end
+	if not raid_events.raid_event_death_truck_id then return end
+	raid_objects_arranger.release_raid_objects(raid_events.raid_event_death_truck_id)
+	raid_events.raid_event_death_truck_id = nil
+end
+
+function on_game_start()
+	raid_events.events_t["death_truck"] = {
+		tiers   = { 1, 2 },
+		exclude = { "raid_mono", "psi_horde" },
+		func    = "death_truck_ev",
+	}
+
+	-- dispatch is _G["raid_events_functors"][func_name], so must be on module table
+	raid_events_functors.death_truck_ev = death_truck_ev
+
+	RegisterScriptCallback("save_state",            save_state)
+	RegisterScriptCallback("load_state",            load_state)
+	RegisterScriptCallback("actor_on_first_update", actor_on_first_update)
+end
