@@ -148,10 +148,6 @@ function death_truck_ev(lname, tier, mod)
 	                   and raid_objects_arranger.raid_objects_arranger[truck_id].pos
 	if center_pos then
 		spawn_dead_monolith_ring(center_pos, math.random(1, 2), lname)
-		CreateTimeEvent("tp", "tp", 5, function()
-			db.actor:set_actor_position(center_pos)
-			return true
-		end)
 	end
 
 	spawning_for_death_truck = true
